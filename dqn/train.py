@@ -4,10 +4,10 @@ import matplotlib.pyplot as plt
 from collections import deque
 import torch
 
-from snake_env import SnakeGameAI
+from snake_env import SnakeGameAI, BLOCK_SIZE
 from dqn_agent import DQNAgent
 
-def train(episodes=1000, max_steps=10000, plot_interval=100, save_interval=100, 
+def train(episodes=2000, max_steps=10000, plot_interval=100, save_interval=100, 
           render_training=False, start_model=None, model_prefix="snake"):
     print("开始训练贪吃蛇AI...")
     
@@ -19,9 +19,22 @@ def train(episodes=1000, max_steps=10000, plot_interval=100, save_interval=100,
     
     # 创建环境和代理
     env = SnakeGameAI(render_ui=render_training)
-    state_size = 11  # 根据环境state的大小
+    # 计算新的状态空间大小
+    map_width = env.w // BLOCK_SIZE
+    map_height = env.h // BLOCK_SIZE
+    state_size = map_width * map_height + 3  # 地图状态 + 上一步操作
     action_size = 3  # [直行, 右转, 左转]
-    agent = DQNAgent(state_size, action_size)
+    
+    # 使用更大的隐藏层大小和更快的训练参数
+    agent = DQNAgent(
+        state_size, 
+        action_size, 
+        hidden_size=512,
+        learning_rate=0.001,  # 增加学习率
+        epsilon_decay=0.997,  # 加快探索率衰减
+        batch_size=256,  # 增加批次大小
+        target_update=5  # 更频繁地更新目标网络
+    )
     
     # 训练数据记录
     scores = []
@@ -228,7 +241,9 @@ def test(model_path, episodes=5, render=True, max_steps=10000):
     print(f"测试模型: {model_path}")
     
     env = SnakeGameAI(render_ui=render)
-    state_size = 11
+    map_width = env.w // BLOCK_SIZE
+    map_height = env.h // BLOCK_SIZE
+    state_size = map_width * map_height + 3  # 地图状态 + 上一步操作
     action_size = 3
     agent = DQNAgent(state_size, action_size)
     
@@ -277,7 +292,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='贪吃蛇强化学习训练程序')
     parser.add_argument('--mode', type=str, default='train', choices=['train', 'test'], 
                         help='运行模式: train或test')
-    parser.add_argument('--episodes', type=int, default=1000, 
+    parser.add_argument('--episodes', type=int, default=2000, 
                         help='训练的轮数')
     parser.add_argument('--render', action='store_true', 
                         help='显示游戏界面')
@@ -287,6 +302,8 @@ if __name__ == "__main__":
                         help='是否从之前的模型继续训练')
     parser.add_argument('--model_prefix', type=str, default='snake', 
                         help='保存模型的名称前缀')
+    parser.add_argument('--fast', action='store_true',
+                        help='使用快速训练模式（不显示渲染）')
     
     args = parser.parse_args()
     
@@ -306,7 +323,10 @@ if __name__ == "__main__":
             else:
                 print("未找到可用的模型，将从头开始训练")
         
-        agent = train(episodes=args.episodes, render_training=args.render, 
+        # 如果使用快速模式，强制关闭渲染
+        render_training = args.render and not args.fast
+        
+        agent = train(episodes=args.episodes, render_training=render_training, 
                       start_model=start_model, model_prefix=args.model_prefix)
     else:
         test(args.model, render=True) 

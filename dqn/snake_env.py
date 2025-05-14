@@ -22,13 +22,21 @@ BLUE2 = (0, 100, 255)
 BLACK = (0, 0, 0)
 
 BLOCK_SIZE = 20
-SPEED = 40
+SPEED = 1000  # 增加游戏速度
 
 class SnakeGameAI:
     def __init__(self, w=640, h=480, render_ui=True):
         self.w = w
         self.h = h
         self.render_ui = render_ui
+        
+        # 默认奖励参数
+        self.base_reward = 30
+        self.step_bonus_multiplier = 20
+        self.step_bonus_decay = 50
+        self.length_bonus = 2
+        self.death_penalty = -20
+        self.distance_reward = 0.2
         
         # 初始化pygame
         if self.render_ui:
@@ -74,62 +82,58 @@ class SnakeGameAI:
         return self._get_state()
     
     def _place_food(self):
-        x = random.randint(0, (self.w-BLOCK_SIZE)//BLOCK_SIZE)*BLOCK_SIZE
-        y = random.randint(0, (self.h-BLOCK_SIZE)//BLOCK_SIZE)*BLOCK_SIZE
+        map_width = self.w // BLOCK_SIZE
+        map_height = self.h // BLOCK_SIZE
+        x = random.randint(0, map_width - 1) * BLOCK_SIZE
+        y = random.randint(0, map_height - 1) * BLOCK_SIZE
         self.food = Point(x, y)
         if self.food in self.snake:
             self._place_food()
     
+    def get_state(self):
+        """获取当前状态的公共接口"""
+        return self._get_state()
+    
     def _get_state(self):
-        head = self.snake[0]
+        # 创建地图状态矩阵 (w//BLOCK_SIZE) x (h//BLOCK_SIZE)
+        map_width = self.w // BLOCK_SIZE
+        map_height = self.h // BLOCK_SIZE
+        state_matrix = np.zeros((map_height, map_width), dtype=int)
         
-        point_l = Point(head.x - BLOCK_SIZE, head.y)
-        point_r = Point(head.x + BLOCK_SIZE, head.y)
-        point_u = Point(head.x, head.y - BLOCK_SIZE)
-        point_d = Point(head.x, head.y + BLOCK_SIZE)
+        # 标记蛇身位置（值为2）
+        for segment in self.snake:
+            x = min(max(0, segment.x // BLOCK_SIZE), map_width - 1)
+            y = min(max(0, segment.y // BLOCK_SIZE), map_height - 1)
+            state_matrix[y, x] = 2
         
-        dir_l = self.direction == Direction.LEFT
-        dir_r = self.direction == Direction.RIGHT
-        dir_u = self.direction == Direction.UP
-        dir_d = self.direction == Direction.DOWN
+        # 标记蛇头位置（值为3）
+        head_x = min(max(0, self.head.x // BLOCK_SIZE), map_width - 1)
+        head_y = min(max(0, self.head.y // BLOCK_SIZE), map_height - 1)
+        state_matrix[head_y, head_x] = 3
         
-        state = [
-            # 危险位置检测
-            (dir_r and self._is_collision(point_r)) or 
-            (dir_l and self._is_collision(point_l)) or 
-            (dir_u and self._is_collision(point_u)) or 
-            (dir_d and self._is_collision(point_d)),
-            
-            (dir_u and self._is_collision(point_r)) or 
-            (dir_d and self._is_collision(point_l)) or 
-            (dir_l and self._is_collision(point_u)) or 
-            (dir_r and self._is_collision(point_d)),
-            
-            (dir_d and self._is_collision(point_r)) or 
-            (dir_u and self._is_collision(point_l)) or 
-            (dir_r and self._is_collision(point_u)) or 
-            (dir_l and self._is_collision(point_d)),
-            
-            # 移动方向
-            dir_l,
-            dir_r,
-            dir_u,
-            dir_d,
-            
-            # 食物相对位置
-            self.food.x < self.head.x,  # 食物在左边
-            self.food.x > self.head.x,  # 食物在右边
-            self.food.y < self.head.y,  # 食物在上边
-            self.food.y > self.head.y   # 食物在下边
-        ]
+        # 标记食物位置（值为1）
+        food_x = min(max(0, self.food.x // BLOCK_SIZE), map_width - 1)
+        food_y = min(max(0, self.food.y // BLOCK_SIZE), map_height - 1)
+        state_matrix[food_y, food_x] = 1
         
-        return np.array(state, dtype=int)
+        # 获取上一步操作（如果没有上一步操作，则默认为直行）
+        last_action = [1, 0, 0]  # 默认直行
+        if hasattr(self, 'last_action'):
+            last_action = self.last_action
+        
+        # 将状态矩阵展平并添加上一步操作
+        state = np.concatenate([
+            state_matrix.flatten(),  # 地图状态
+            last_action  # 上一步操作
+        ])
+        
+        return state
     
     def _is_collision(self, pt=None):
         if pt is None:
             pt = self.head
         # 撞墙
-        if pt.x > self.w - BLOCK_SIZE or pt.x < 0 or pt.y > self.h - BLOCK_SIZE or pt.y < 0:
+        if pt.x >= self.w or pt.x < 0 or pt.y >= self.h or pt.y < 0:
             return True
         # 撞到自己
         if pt in self.snake[1:]:
@@ -139,6 +143,9 @@ class SnakeGameAI:
     def step(self, action):
         self.frame_iteration += 1
         self.steps_since_last_food += 1
+        
+        # 保存当前动作作为下一步的上一步操作
+        self.last_action = action
         
         # 处理游戏退出
         if self.render_ui:
@@ -175,18 +182,22 @@ class SnakeGameAI:
         # 如果碰撞或者过长时间没吃到食物
         if self._is_collision() or self.frame_iteration > 100*len(self.snake):
             game_over = True
-            reward = -10
+            reward = self.death_penalty
             return reward, game_over, self.score
         
         # 计算到食物的距离变化
         old_distance = abs(old_head.x - self.food.x) + abs(old_head.y - self.food.y)
         new_distance = abs(self.head.x - self.food.x) + abs(self.head.y - self.food.y)
-        distance_reward = 0.1 if new_distance < old_distance else -0.1
+        distance_reward = self.distance_reward if new_distance < old_distance else -self.distance_reward
         
         # 吃到食物
         if self.head == self.food:
             self.score += 1
-            reward = 10 + np.exp(-self.steps_since_last_food / 100)
+            # 计算奖励
+            step_bonus = np.exp(-self.steps_since_last_food / self.step_bonus_decay) * self.step_bonus_multiplier
+            length_bonus = len(self.snake) * self.length_bonus
+            reward = self.base_reward + step_bonus + length_bonus
+            
             self.steps_since_last_food = 0
             self._place_food()
             # 重置位置历史记录
@@ -237,6 +248,9 @@ class SnakeGameAI:
         self.head = Point(x, y)
     
     def _update_ui(self):
+        if not self.render_ui:
+            return
+            
         self.display.fill(BLACK)
         
         # 画蛇
@@ -257,7 +271,15 @@ class SnakeGameAI:
         self.display.blit(reward_text, [0, 30])
         
         pygame.display.flip()
+        self.clock.tick(SPEED)  # 控制帧率
     
     def close(self):
         if self.render_ui:
-            pygame.quit() 
+            pygame.quit()
+    
+    def get_state_size(self):
+        """返回状态空间的大小"""
+        map_width = self.w // BLOCK_SIZE
+        map_height = self.h // BLOCK_SIZE
+        # 状态包括：地图状态 + 上一步动作
+        return map_width * map_height + 3 

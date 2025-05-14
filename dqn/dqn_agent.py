@@ -9,14 +9,27 @@ from collections import deque
 class DQNNetwork(nn.Module):
     def __init__(self, input_size, hidden_size, output_size):
         super().__init__()
-        self.fc1 = nn.Linear(input_size, hidden_size)
-        self.fc2 = nn.Linear(hidden_size, hidden_size)
-        self.fc3 = nn.Linear(hidden_size, output_size)
+        # 增加网络深度和宽度
+        self.fc1 = nn.Linear(input_size, hidden_size * 2)
+        self.fc2 = nn.Linear(hidden_size * 2, hidden_size * 2)
+        self.fc3 = nn.Linear(hidden_size * 2, hidden_size)
+        self.fc4 = nn.Linear(hidden_size, output_size)
+        
+        # 添加Dropout层防止过拟合
+        self.dropout = nn.Dropout(0.2)
     
     def forward(self, x):
+        # 确保输入是2D张量 [batch_size, features]
+        if len(x.shape) == 1:
+            x = x.unsqueeze(0)
+            
         x = F.relu(self.fc1(x))
+        x = self.dropout(x)
         x = F.relu(self.fc2(x))
-        return self.fc3(x)
+        x = self.dropout(x)
+        x = F.relu(self.fc3(x))
+        x = self.dropout(x)
+        return self.fc4(x)
 
 class ReplayMemory:
     def __init__(self, capacity):
@@ -32,9 +45,9 @@ class ReplayMemory:
         return len(self.memory)
 
 class DQNAgent:
-    def __init__(self, state_size, action_size, hidden_size=256, learning_rate=0.001, gamma=0.99, 
-                 epsilon=1.0, epsilon_min=0.01, epsilon_decay=0.995, memory_size=100000, 
-                 batch_size=64, target_update=10, lr_decay=0.995):
+    def __init__(self, state_size, action_size, hidden_size=512, learning_rate=0.0005, gamma=0.99, 
+                 epsilon=1.0, epsilon_min=0.01, epsilon_decay=0.995, memory_size=200000, 
+                 batch_size=128, target_update=10, lr_decay=0.995):
         self.state_size = state_size
         self.action_size = action_size
         self.hidden_size = hidden_size
@@ -57,7 +70,8 @@ class DQNAgent:
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()  # 评估模式，不计算梯度
         
-        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=learning_rate)
+        # 使用Adam优化器，添加权重衰减
+        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=learning_rate, weight_decay=1e-5)
         self.criterion = nn.MSELoss()
         
         self.learn_step_counter = 0
